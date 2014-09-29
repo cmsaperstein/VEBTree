@@ -1,7 +1,10 @@
+{-# LANGUAGE OverloadedLists #-}
+
 
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<$>), (<*>) )
 import Control.Monad ((=<<))
+import qualified Data.Vector as V
 
 --initially assume that u is a power of 2
 data VEBTree = VEBNode 
@@ -9,7 +12,7 @@ data VEBTree = VEBNode
     , v_min :: Maybe Int
     , v_max :: Maybe Int
     , summary :: VEBTree
-    , cluster :: [VEBTree]
+    , clusters :: V.Vector VEBTree
     }
     -- for the VEB base, u=2
     | VEBBase
@@ -54,41 +57,36 @@ maxNum (VEBNode u _ _ _ _) = u
 minEqualsMax :: VEBTree -> Bool
 minEqualsMax tree = v_min tree == v_max tree
 
-insert :: Int -> VEBTree -> VEBTree
--- TODO: use this for early exits, currently I'm assuming that the elemnt to insert is not initially in the tree
--- Do not insert if it is already in the tree
---insert a tree 
---   | isMinOrMax a tree = tree 
+insert :: Int -> VEBTree -> VEBTree 
 -- cannot insert elements outside of the key range [0,u)
-
 insert a tree | a > maxNum tree = tree
 -- Base case -- initialize the node
-insert a (VEBNode u Nothing Nothing summary cluster) = (VEBNode u (Just a) (Just a)  summary cluster)
+insert a (VEBNode u Nothing Nothing summary clusters) = (VEBNode u (Just a) (Just a)  summary clusters)
 insert a (VEBBase Nothing Nothing) = VEBBase (Just a) (Just a)
 -- The next two cases are about replacing min if a <min or max if a>max
 insert a (VEBBase (Just val_min) (Just val_max)) 
     | a < val_max = VEBBase (Just a) (Just val_max)
     | a > val_max = VEBBase (Just val_min) (Just a) 
 insert a (VEBNode u (Just val_min) (Just val_max) summary cluster)
-    | a < val_min = insert val_min (VEBNode u (Just a) (Just val_max) summary cluster)
-    | a > val_max = insert val_max (VEBNode u (Just val_min) (Just a) summary cluster)
+    | a < val_min = insert val_min (VEBNode u (Just a) (Just val_max) summary clusters)
+    | a > val_max = insert val_max (VEBNode u (Just val_min) (Just a) summary clusters)
 -- insert the node deeper into the tree if minimum and maximum do not have to be replaced
-insert a tree@(VEBNode u maybe_min maybe_max summary cluster) =  
-    let new_node = insert (low tree a) (cluster !! (high tree a)) 
-        new_cluster = take (high tree a) cluster ++ new_node:drop ((high tree a) +1) cluster 
-     in case v_min $ cluster !! (high tree a) of
+insert a tree@(VEBNode u maybe_min maybe_max summary clusters) =  
+    let new_node = insert (low tree a) (clusters !! (high tree a)) 
+        new_clusters = take (high tree a) clusters ++ new_node:drop ((high tree a) +1) clusters 
+     in case v_min $ clusters !! (high tree a) of
         Nothing -> VEBNode u maybe_min maybe_max (insert (high tree a) summary) new_cluster
-        _ -> VEBNode u maybe_min maybe_max summary new_cluster 
+        _ -> VEBNode u maybe_min maybe_max summary new_clusters 
 
 successor :: Int -> VEBTree -> Maybe Int
 successor a (VEBBase Nothing _) = Nothing
 successor a (VEBBase (Just 0) (Just 1)) = Just 1
 successor a (VEBBase _ _ ) = Nothing
 successor a (VEBNode  _ (Just val_min) _ _ _) | a < val_min = return val_min
-successor a tree@(VEBNode _ _ _ summary cluster ) = 
-    case v_max $ cluster !! (high tree a) of
+successor a tree@(VEBNode _ _ _ summary clusters ) = 
+    case v_max $ clusters !! (high tree a) of
         Just max_low | low tree a < max_low ->
-            let offset = successor (low tree a) (cluster !! (high tree a))
+            let offset = successor (low tree a) (clusters !! (high tree a))
              in index tree (high tree a) <$> offset
         _ ->
             case successor (high tree a) summary of
@@ -99,8 +97,8 @@ successor a tree@(VEBNode _ _ _ summary cluster ) =
 
 -- TODO: check if the element exists before trying to delete it. This code assumes the element already exists
 delete :: Int -> VEBTree -> VEBTree
-delete _ tree@(VEBNode u maybe_min maybe_max summary cluster) 
-   | minEqualsMax tree = VEBNode u Nothing Nothing summary cluster
+delete _ tree@(VEBNode u maybe_min maybe_max summary clusters) 
+   | minEqualsMax tree = VEBNode u Nothing Nothing summary clusters
 delete _ tree@(VEBBase maybe_min maybe_max) 
     | minEqualsMax tree = VEBBase Nothing Nothing
 delete 0 (VEBBase _ (Just 1)) = VEBBase (Just 1) (Just 1)
