@@ -1,10 +1,17 @@
-{-# LANGUAGE OverloadedLists #-}
-
+module Data.VEBTree 
+    (   VEBTree
+    ,   empty
+    ,   member
+    ,   insert
+    ,   successor
+    ,   delete
+    ) where
 
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<$>), (<*>) )
 import Control.Monad ((=<<))
-import qualified Data.Vector as V
+import qualified Data.Vector as V (Vector, replicate, (!), (//)) 
+import Test.QuickCheck
 
 --initially assume that u is a power of 2
 data VEBTree = VEBNode 
@@ -19,16 +26,27 @@ data VEBTree = VEBNode
     { v_min :: Maybe Int
     , v_max :: Maybe Int
     }
-    deriving (Show)
+    deriving (Show, Eq)
+
+instance Arbitrary VEBTree where
+    arbitrary = fromList <$> (arbitrary :: Gen [Int])
+
 
 isqrt :: Int -> Int
 isqrt = round . sqrt . fromIntegral
 
+upPowerOfTwo :: Int -> Int
+upPowerOfTwo x | x <= 0 = 0
+upPowerOfTwo x = (^) 2  . ceiling . logBase 2 . fromIntegral $ x
+
 empty :: Int -> VEBTree
 empty 2 = VEBBase Nothing Nothing
-empty a = VEBNode a Nothing Nothing (empty a') (replicate a' (empty a'))
-    where a' = isqrt a 
+empty a = VEBNode (upPowerOfTwo a) Nothing Nothing (empty a') (V.replicate a' (empty a'))
+    where a' = isqrt (upPowerOfTwo a) 
 
+fromList :: [Int] -> VEBTree
+fromList x = foldr insert (empty len) x
+    where len = length x 
 
 maybeOr :: Maybe Bool -> Maybe Bool -> Bool
 maybeOr x y = (fromMaybe False x) || (fromMaybe False y)
@@ -46,9 +64,10 @@ index :: VEBTree -> Int -> Int -> Int
 index tree x y = x * (isqrt (u tree)) + y
 
 member :: Int -> VEBTree -> Bool
+member a tree | a > maxNum tree || a < 0 = False
 member a tree@(VEBBase _ _)= isMinOrMax a tree  
 member a tree@(VEBNode _ _ _ _ _)= isMinOrMax a tree 
-        || member (low tree a) ((cluster tree) !! (high tree a))  
+        || member (low tree a) ((clusters tree) V.! (high tree a))  
 
 maxNum :: VEBTree -> Int
 maxNum (VEBBase _ _) = 1
@@ -59,7 +78,7 @@ minEqualsMax tree = v_min tree == v_max tree
 
 insert :: Int -> VEBTree -> VEBTree 
 -- cannot insert elements outside of the key range [0,u)
-insert a tree | a > maxNum tree = tree
+insert a tree | a > maxNum tree || a < 0 = tree
 -- Base case -- initialize the node
 insert a (VEBNode u Nothing Nothing summary clusters) = (VEBNode u (Just a) (Just a)  summary clusters)
 insert a (VEBBase Nothing Nothing) = VEBBase (Just a) (Just a)
@@ -67,15 +86,15 @@ insert a (VEBBase Nothing Nothing) = VEBBase (Just a) (Just a)
 insert a (VEBBase (Just val_min) (Just val_max)) 
     | a < val_max = VEBBase (Just a) (Just val_max)
     | a > val_max = VEBBase (Just val_min) (Just a) 
-insert a (VEBNode u (Just val_min) (Just val_max) summary cluster)
+insert a (VEBNode u (Just val_min) (Just val_max) summary clusters)
     | a < val_min = insert val_min (VEBNode u (Just a) (Just val_max) summary clusters)
     | a > val_max = insert val_max (VEBNode u (Just val_min) (Just a) summary clusters)
 -- insert the node deeper into the tree if minimum and maximum do not have to be replaced
 insert a tree@(VEBNode u maybe_min maybe_max summary clusters) =  
-    let new_node = insert (low tree a) (clusters !! (high tree a)) 
-        new_clusters = take (high tree a) clusters ++ new_node:drop ((high tree a) +1) clusters 
-     in case v_min $ clusters !! (high tree a) of
-        Nothing -> VEBNode u maybe_min maybe_max (insert (high tree a) summary) new_cluster
+    let new_node = insert (low tree a) (clusters V.! (high tree a)) 
+        new_clusters = clusters V.// [(high tree a, new_node)] 
+     in case v_min $ clusters V.! (high tree a) of
+        Nothing -> VEBNode u maybe_min maybe_max (insert (high tree a) summary) new_clusters    
         _ -> VEBNode u maybe_min maybe_max summary new_clusters 
 
 successor :: Int -> VEBTree -> Maybe Int
@@ -84,15 +103,15 @@ successor a (VEBBase (Just 0) (Just 1)) = Just 1
 successor a (VEBBase _ _ ) = Nothing
 successor a (VEBNode  _ (Just val_min) _ _ _) | a < val_min = return val_min
 successor a tree@(VEBNode _ _ _ summary clusters ) = 
-    case v_max $ clusters !! (high tree a) of
+    case v_max $ clusters V.! (high tree a) of
         Just max_low | low tree a < max_low ->
-            let offset = successor (low tree a) (clusters !! (high tree a))
+            let offset = successor (low tree a) (clusters V.! (high tree a))
              in index tree (high tree a) <$> offset
         _ ->
             case successor (high tree a) summary of
                 Nothing -> Nothing
                 Just succ_cluster ->
-                    let offset = v_min $ cluster !! succ_cluster
+                    let offset = v_min $ clusters V.! succ_cluster
                     in index tree succ_cluster <$> offset
 
 -- TODO: check if the element exists before trying to delete it. This code assumes the element already exists
@@ -106,22 +125,22 @@ delete 1 (VEBBase (Just 0) _ ) = VEBBase (Just 0) (Just 0)
 delete a tree@(VEBNode u (Just val_min) maybe_max summary clusters)
     | a == val_min =
         let first_cluster = v_min summary
-            next_min = (index tree) <$> first_cluster <*> ( v_min =<< (((!!) clusters) <$> first_cluster))
-            new_cluster = delete (low tree a) (clusters !!  (high tree a))
-            new_clusters = take (high tree a) clusters ++ new_cluster: drop ((high tree a )+1) clusters
+            next_min = (index tree) <$> first_cluster <*> ( v_min =<< (((V.!) clusters) <$> first_cluster))
+            new_cluster = delete (low tree a) (clusters V.!  (high tree a))
+            new_clusters = clusters V.// [(high tree a, new_cluster)]
          in delete' a (VEBNode u next_min maybe_max summary  new_clusters)
     | otherwise = 
-        let new_cluster = delete (low tree a) (clusters !!  (high tree a))
-            new_clusters = take (high tree a) clusters ++ new_cluster: drop ((high tree a )+1) clusters
+        let new_cluster = delete (low tree a) (clusters V.!  (high tree a))
+            new_clusters = clusters V.// [(high tree a, new_cluster)]
          in delete' a (VEBNode u (Just val_min) maybe_max summary new_clusters)
 
 delete' a tree@(VEBNode u maybe_min maybe_max summary clusters)
-    | (v_min $ clusters !! (high tree a)) == Nothing = 
+    | (v_min $ clusters V.! (high tree a)) == Nothing = 
         let new_summary = delete (high tree a) summary
          in if (Just a) == maybe_max 
                 then case v_max new_summary of
                     Nothing -> VEBNode u maybe_min maybe_min new_summary clusters
-                    Just summary_max -> VEBNode u maybe_min (index tree summary_max <$> (v_min (clusters !! summary_max))) new_summary clusters
+                    Just summary_max -> VEBNode u maybe_min (index tree summary_max <$> (v_min (clusters V.! summary_max))) new_summary clusters
                 else VEBNode u maybe_min maybe_max new_summary clusters
-    | Just a == maybe_max = VEBNode u maybe_min (index tree (high tree a)  <$> (v_max $ clusters !! (high tree a))) summary clusters
+    | Just a == maybe_max = VEBNode u maybe_min (index tree (high tree a)  <$> (v_max $ clusters V.! (high tree a))) summary clusters
     | otherwise = tree
