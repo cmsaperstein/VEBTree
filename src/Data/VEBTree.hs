@@ -5,6 +5,8 @@ module Data.VEBTree
     ,   insert
     ,   successor
     ,   delete
+    ,   u
+    ,   fromList
     ) where
 
 import Data.Maybe (fromMaybe)
@@ -40,13 +42,14 @@ upPowerOfTwo x | x <= 0 = 0
 upPowerOfTwo x = (^) 2  . ceiling . logBase 2 . fromIntegral $ x
 
 empty :: Int -> VEBTree
-empty 2 = VEBBase Nothing Nothing
+empty 2 =  VEBBase Nothing Nothing
 empty a = VEBNode (upPowerOfTwo a) Nothing Nothing (empty a') (V.replicate a' (empty a'))
     where a' = isqrt (upPowerOfTwo a) 
 
 fromList :: [Int] -> VEBTree
-fromList x = foldr insert (empty len) x
-    where len = length x 
+fromList [] = empty 4
+fromList x = foldr insert (empty size) x
+    where size = max 4 (1+ maximum x) 
 
 maybeOr :: Maybe Bool -> Maybe Bool -> Bool
 maybeOr x y = (fromMaybe False x) || (fromMaybe False y)
@@ -71,7 +74,7 @@ member a tree@(VEBNode _ _ _ _ _)= isMinOrMax a tree
 
 maxNum :: VEBTree -> Int
 maxNum (VEBBase _ _) = 1
-maxNum (VEBNode u _ _ _ _) = u
+maxNum (VEBNode u _ _ _ _) = u-1
 
 minEqualsMax :: VEBTree -> Bool
 minEqualsMax tree = v_min tree == v_max tree
